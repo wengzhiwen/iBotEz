@@ -1,0 +1,50 @@
+# iBotEz configuration. Copy this file to `config.toml` and edit.
+
+[poll]
+# Seconds between chat.db polls. Starts at `interval_seconds`; each empty poll
+# multiplies it by `backoff_factor` up to `max_interval_seconds`, then resets to
+# `interval_seconds` as soon as a new message arrives.
+interval_seconds = 2.0
+max_interval_seconds = 15.0
+backoff_factor = 1.5
+
+[imessage]
+db_path = "~/Library/Messages/chat.db"
+
+[pi]
+# How iBotEz launches Pi in RPC mode. The provider/model are left to Pi's own
+# settings (configure with `pi config`), so normally you only need the command.
+command = ["pi", "--mode", "rpc"]
+# cwd = "."
+# Slow-turn handling:
+progress_interval_seconds = 30      # send a progress iMessage every this long while Pi works (0 = off)
+no_progress_timeout_seconds = 120   # no Pi event for this long => stalled => abort + retry
+max_retries = 2                     # bounded retries on stall/failure
+append_instruction = true           # tell Pi this bot is text-only (it refuses file generate/send requests)
+
+[bridge]
+# Whitelist of senders (phone numbers or emails) whose messages get bridged.
+# Phone numbers are matched on their last 10 digits; emails are lowercased.
+# Easiest way to populate this: run `python -m ibotez chats`.
+allow = []
+# Fallback reply when Pi fails to produce an answer. Empty ("") = send nothing.
+reply_on_error = "（处理出错了，请稍后再试）"
+
+# Scheduled tasks: run a Pi prompt on a cron schedule and send the result to a
+# contact. Repeat [[schedule]] for multiple tasks. `to` is a phone/email with an
+# existing iMessage conversation. Cron is 5 fields: minute hour day month weekday
+# (0=Sunday); supports *, */N, N, N-M, N,M.
+#
+# [[schedule]]
+# name = "morning-forex"
+# cron = "0 9 * * *"                       # every day at 09:00
+# prompt = "请简洁总结今日美元兑日元汇率的重要新闻"
+# to = "+8613xxxxxxxx"
+
+[health]
+# The watchdog checks every `check_seconds`. It restarts iBotEz (by exiting
+# non-zero so the supervisor relaunches) when: the Pi subprocess dies, or the
+# queue is non-empty with no worker progress for `stall_seconds`.
+check_seconds = 5
+stall_seconds = 600
+max_depth = 100   # queue depth at which a warning is logged

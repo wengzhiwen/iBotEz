@@ -1,0 +1,22 @@
+# Python
+venv/
+.venv/
+.venv-ppt/
+__pycache__/
+*.pyc
+
+# Local config & runtime state — DO NOT COMMIT (contains phone numbers / paths)
+config.toml
+state.json
+.pi-sessions/
+
+# Logs: keep the directory, ignore its contents
+logs/*
+!logs/.gitkeep
+
+# Pi-generated scratch (Pi runs with cwd = this project dir)
+/create_apple_test_ppt.py
+*.pptx
+*.docx
+*.xlsx
+*.pdf

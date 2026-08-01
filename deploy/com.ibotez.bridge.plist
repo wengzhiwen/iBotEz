@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for iBotEz. Install with:
+    mkdir -p ~/Library/LaunchAgents
+    cp deploy/com.ibotez.bridge.plist ~/Library/LaunchAgents/
+    UID=$(id -u); launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.ibotez.bridge.plist
+  Stop / uninstall:
+    UID=$(id -u); launchctl bootout gui/$UID/com.ibotez.bridge
+  Status / logs:
+    launchctl print gui/$(id -u)/com.ibotez.bridge
+    tail -f logs/ibotez.err.log
+
+  KeepAlive {SuccessfulExit:false} => launchd relaunches iBotEz whenever it exits
+  NON-ZERO (iBotEz raises this on Pi death or worker stall). A clean exit 0
+  (SIGTERM/SIGINT or normal stop) is NOT restarted.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ibotez.bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3.14</string>
+        <string>-m</string>
+        <string>ibotez</string>
+        <string>-c</string>
+        <string>/Users/yourname/Documents/iBotEz/config.toml</string>
+        <string>run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yourname/Documents/iBotEz</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/yourname/Documents/iBotEz/logs/ibotez.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yourname/Documents/iBotEz/logs/ibotez.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/yourname/.nvm/versions/node/v24.18.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>
