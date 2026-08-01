@@ -26,6 +26,16 @@ async def scheduler(
     queue: asyncio.Queue,
     health,
 ) -> None:
+    # Validate cron expressions up front; drop invalid tasks (with a clear log).
+    valid: list[Schedule] = []
+    for s in schedules:
+        try:
+            matches(s.cron, datetime.now())  # raises ValueError if malformed
+            valid.append(s)
+        except ValueError as e:
+            log.error("schedule %r has invalid cron %r: %s — disabled", s.name, s.cron, e)
+    schedules = valid
+
     if not schedules:
         log.info("no scheduled tasks configured")
         return

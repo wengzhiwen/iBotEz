@@ -1,4 +1,10 @@
-"""iBotEz CLI: `run` the bridge, `chats` to manage the whitelist, `send` to test."""
+"""iBotEz CLI.
+
+Commands:
+  run    start the bridge (poll -> Pi -> reply)
+  chats  list iMessage conversations and manage the whitelist
+  send   send a one-off test message to a chat
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import imessage
+from . import __version__, imessage
 from .bridge import run as run_bridge
 from .config import Config, write_allow
 
@@ -19,15 +25,19 @@ faulthandler.enable()
 faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(cfg: Config, verbose: bool) -> None:
+    """Configure logging to stderr + a file (configurable via [log])."""
+    level = logging.DEBUG if verbose else getattr(logging, cfg.log_level or "INFO", logging.INFO)
     root = Path(__file__).resolve().parent.parent
+    log_file = cfg.log_file or str(root / "logs" / "ibotez.log")
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     try:
-        handlers.append(logging.FileHandler(root / "logs" / "ibotez.log"))
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
     except Exception:
-        pass
+        pass  # file logging is best-effort; stderr always works
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
         handlers=handlers,
@@ -41,8 +51,7 @@ def _fmt_date(date_val: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone().strftime("%m-%d %H:%M")
 
 
-def _cmd_run(args) -> int:
-    cfg = Config.load(args.config)
+def _cmd_run(cfg: Config) -> int:
     try:
         asyncio.run(run_bridge(cfg))
     except KeyboardInterrupt:
@@ -50,8 +59,7 @@ def _cmd_run(args) -> int:
     return 0
 
 
-def _cmd_chats(args) -> int:
-    cfg = Config.load(args.config)
+def _cmd_chats(cfg: Config) -> int:
     con = imessage.connect(cfg.db_path)
     try:
         chats = imessage.list_chats(con)
@@ -103,34 +111,38 @@ def _cmd_chats(args) -> int:
             print(f"  ignored: {tok!r}")
 
     if added:
-        write_allow(args.config, allow)
+        write_allow(cfg.config_path, allow)
         print(f"\nAdded {len(added)}: {added}")
-        print(f"whitelist now has {len(allow)} entry/entries (saved to {args.config}).")
+        print(f"whitelist now has {len(allow)} entry/entries (saved to {cfg.config_path}).")
     else:
         print("Nothing added.")
     return 0
 
 
-def _cmd_send(args) -> int:
-    imessage.send(args.chat_guid, args.text)
+def _cmd_send(chat_guid: str, text: str) -> int:
+    imessage.send(chat_guid, text)
     print("sent.")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="ibotez", description="iMessage <-> Pi bridge")
-    p.add_argument("-c", "--config", default="config.toml")
-    p.add_argument("-v", "--verbose", action="store_true")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(
+        prog="ibotez",
+        description="iBotEz — a minimal iMessage <-> Pi (pi.dev) bridge for macOS.",
+        epilog="Docs: https://github.com/wengzhiwen/iBotEz",
+    )
+    p.add_argument("-c", "--config", default="config.toml", help="path to config.toml")
+    p.add_argument("-v", "--verbose", action="store_true", help="verbose (DEBUG) logging")
+    p.add_argument("-V", "--version", action="version", version=f"ibotez {__version__}")
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
 
     sub.add_parser("run", help="start the bridge")
     sub.add_parser("chats", help="list conversations and manage the whitelist")
-    s = sub.add_parser("send", help="send a test message to a chat_guid")
-    s.add_argument("chat_guid")
-    s.add_argument("text")
+    s = sub.add_parser("send", help="send a one-off test message")
+    s.add_argument("chat_guid", help="chat GUID, e.g. 'iMessage;-;+15551234567'")
+    s.add_argument("text", help="message text")
 
     args = p.parse_args(argv)
-    _setup_logging(args.verbose)
 
     if not Path(args.config).exists():
         print(
@@ -139,12 +151,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    cfg = Config.load(args.config)
+    _setup_logging(cfg, args.verbose)
+
     if args.cmd == "run":
-        return _cmd_run(args)
+        return _cmd_run(cfg)
     if args.cmd == "chats":
-        return _cmd_chats(args)
+        return _cmd_chats(cfg)
     if args.cmd == "send":
-        return _cmd_send(args)
+        return _cmd_send(args.chat_guid, args.text)
     return 0
 
 

@@ -3,8 +3,30 @@ name = "ibotez"
 version = "0.1.0"
 description = "Minimal iMessage <-> Pi (pi.dev) message bridge for macOS"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+authors = [{ name = "James Weng", url = "https://github.com/wengzhiwen" }]
+keywords = ["imessage", "pi.dev", "bridge", "macos", "agent", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+]
 # No runtime dependencies — Python standard library only.
+
+[project.urls]
+Homepage = "https://github.com/wengzhiwen/iBotEz"
+Repository = "https://github.com/wengzhiwen/iBotEz"
+Issues = "https://github.com/wengzhiwen/iBotEz/issues"
 
 [project.scripts]
 ibotez = "ibotez.__main__:main"

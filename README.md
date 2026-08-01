@@ -1,104 +1,95 @@
 # iBotEz
 
-A minimal **iMessage ⇄ [Pi](https://pi.dev)** message bridge for macOS.
+`English` | [`中文`](README.zh-CN.md) | [`日本語`](README.ja.md)
 
-iBotEz watches `~/Library/Messages/chat.db` for new iMessages from **whitelisted**
-contacts, forwards each one to a local Pi agent (RPC mode), and texts Pi's reply
-back through Messages.app. iBotEz is *just the bridge* — Pi does all the thinking
-(models, skills, tools).
+**A minimal iMessage ⇄ [Pi](https://pi.dev) bridge for macOS.**
+
+iBotEz watches the local `~/Library/Messages/chat.db` for new iMessages from **whitelisted** contacts, forwards each one to a local [Pi](https://pi.dev) agent (RPC mode), and texts Pi's reply back through Messages.app. iBotEz is *just the bridge* — Pi does all the thinking (models, skills, tools).
+
+## Features
+
+- **Text bridge**: incoming iMessage → Pi → reply, plus **cron-scheduled** Pi tasks that proactively push results to a contact.
+- **Whitelist by phone/email**, managed with an interactive `chats` picker.
+- **Adaptive polling** of chat.db (2s → 15s backoff) that is **WAL-aware** (never misses new messages).
+- **Health watchdog** that self-restarts if the Pi subprocess dies or the worker stalls.
+- **Slow-turn handling**: periodic progress reports + bounded retry when Pi stalls.
+- **Per-contact Pi sessions**, resumed across restarts.
+- **Zero runtime dependencies** — Python 3.11+ standard library only.
 
 ## Requirements
 
-- macOS (built/tested on 26.x) with **Messages.app** signed in to iMessage
-- **Python 3.11+** (a 3.14 venv is included in `venv/`)
+- **macOS** (built/tested on 26.x) with **Messages.app** signed in to iMessage
+- **Python 3.11+**
 - **[Pi](https://pi.dev)** installed and configured with a model provider (`pi config`)
-- **Full Disk Access** granted to the Python interpreter / terminal that runs iBotEz
-  *(otherwise chat.db reads silently return empty)*
-- **Automation** permission for controlling Messages.app *(prompted on first send)*
+- **Full Disk Access** granted to the Python interpreter that runs iBotEz (required to read chat.db)
+- **Automation** permission for controlling Messages.app (prompted on first send)
 
-## Setup
+## Quick start
 
 ```bash
+git clone https://github.com/wengzhiwen/iBotEz.git
+cd iBotEz
+python3.14 -m venv venv        # any Python 3.11+ works
 cp config.example.toml config.toml
-venv/bin/python -m ibotez chats      # list conversations, pick ones to whitelist
-venv/bin/python -m ibotez run        # start the bridge
+venv/bin/python -m ibotez chats   # list conversations, pick ones to whitelist
+venv/bin/python -m ibotez run     # start the bridge
 ```
 
-(Or `source venv/bin/activate` first, then drop the `venv/bin/` prefix.)
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `python -m ibotez chats` | List conversations; interactively add senders to the whitelist |
-| `python -m ibotez run` | Start polling and bridging |
-| `python -m ibotez send "<chat_guid>" "text"` | Send a test message to a chat |
+(Or `pip install -e .` and use the `ibotez` command.) Then send an iMessage from a whitelisted contact — iBotEz replies via Pi.
 
 ## How it works
 
-- Reads chat.db **read-only** every `interval_seconds`, tracking a high-watermark.
-- **First run skips the backlog** (watermark = newest message at startup) so it
-  never replies to old history.
-- Each whitelisted contact maps to its **own Pi session**, resumed across restarts
-  via `state.json` (`switch_session`).
-- Replies are sent with AppleScript through Messages.app; iBotEz never touches
-  iMessage credentials.
+```
+contact ──iMessage──▶ Messages.app ──▶ chat.db
+                                        │  (polled, WAL-aware)
+iBotEz ──prompt──▶ Pi (RPC) ──reply──▶ iBotEz ──osascript──▶ Messages.app ──▶ contact
+```
 
-Whitelist matching: phone numbers compare on the **last 10 digits**, emails are
-lowercased — so `+1 (555) 123-4567` and `5551234567` are the same contact.
+- chat.db is polled **read-only** every `interval_seconds`, tracking a high-watermark. The first run skips the backlog.
+- Each whitelisted contact maps to its **own Pi session**, resumed across restarts via `state.json`.
+- Replies are sent with AppleScript through Messages.app; iBotEz never touches iMessage credentials.
 
-## ⚠️ Security
+## Configuration
 
-Pi is a coding agent with **Bash / Read / Write / Edit** tools. Bridging iMessage
-to it means a whitelisted contact can — via Pi — run commands on your Mac. Keep
-the whitelist to numbers you control, and be aware Pi may call tools in response
-to a message. See [`docs/design.md`](docs/design.md) for the full design.
+Everything lives in `config.toml` (see `config.example.toml`):
 
-## 定时任务（主动推送）
+| Section | Keys (defaults) |
+|---|---|
+| `[poll]` | `interval_seconds` (2), `max_interval_seconds` (15), `backoff_factor` (1.5) |
+| `[imessage]` | `db_path` (`~/Library/Messages/chat.db`) |
+| `[pi]` | `command` (`["pi","--mode","rpc"]`), `progress_interval_seconds` (30), `no_progress_timeout_seconds` (120), `max_retries` (2), `append_instruction` (true) |
+| `[bridge]` | `allow` (whitelist of phones/emails), `reply_on_error` |
+| `[[schedule]]` | `cron`, `prompt`, `to`, `name` |
+| `[health]` | `check_seconds` (5), `stall_seconds` (600), `max_depth` (100) |
+| `[log]` | `file`, `level` (`INFO`) |
 
-在 `config.toml` 加 `[[schedule]]` 表，iBotEz 会按 cron 时间自动跑 Pi 提示词，并把结果发给指定联系人：
+Whitelist matching: phones compare on the **last 10 digits**, emails are lowercased — so `+1 (555) 123-4567` and `5551234567` are the same contact.
+
+## Scheduled tasks
+
+Run a Pi prompt on a cron schedule and send the result to a contact:
 
 ```toml
 [[schedule]]
 name = "morning-forex"
-cron = "0 9 * * *"            # 5 段：分 时 日 月 周（0=周日）；支持 *  */N  N  N-M  N,M
-prompt = "请简洁总结今日美元兑日元汇率的重要新闻"
-to = "+8613xxxxxxxx"          # 你的号码/邮箱（需已有 iMessage 会话，运行时在 chat.db 解析 chat_guid）
+cron = "0 9 * * *"               # 5-field: min hour dom mon dow (0=Sun); supports *, */N, N, N-M, N,M
+prompt = "Summarize today's USD/JPY forex news."
+to = "+8613xxxxxxxx"             # a contact with an existing iMessage conversation
 ```
 
-每个任务有独立的 Pi 会话（跨次保留上下文），并与收信回复共用同一套「进度回报 + 重试」。
+## ⚠️ Important limitation: sending only works interactively
 
-## 慢任务进度回报 & 卡住重试
+iBotEz **must run in a foreground / GUI session** (Terminal, tmux). macOS **silently blocks scripted iMessage sending from background `launchd` daemons** (the AppleScript returns success but the message is never delivered), and homebrew's venv interpreter hangs under launchd. Therefore:
 
-Pi 回复慢时，每隔 `progress_interval_seconds`（默认 30s）给你发一条进度（含 Pi 当前状态：思考中 / 调用工具… / 生成回复中）。Pi 长时间无动静（`no_progress_timeout_seconds`，默认 120s）视为卡住 → 自动中止并重试，最多 `max_retries` 次（默认 2），仍失败则发兜底回复。配置在 `[pi]` 下：
+- Run interactively: `venv/bin/python -m ibotez run`
+- For auto-restart, wrap it: `while true; do venv/bin/python -m ibotez run; sleep 5; done`
 
-```toml
-progress_interval_seconds = 30      # 0 = 关闭进度回报
-no_progress_timeout_seconds = 120
-max_retries = 2
-```
+This bot is **text-only**: file attachments can't be delivered programmatically either, so Pi is instructed to refuse file-generation / file-send requests.
 
-## 仅文本（无法发送文件）
+## Security
 
-这个 bot 只能通过 iMessage 发送**纯文本**——macOS 不允许程序化发送文件附件（AppleScript/Shortcuts 都会被拦截或失败），所以文件发送功能没有实现。iBotEz 启动时会向 Pi 注入一条能力说明：当用户要求**生成/导出/保存文件**或**把文件发过来**时，Pi 会直接告知"无法通过 iMessage 发送文件"，并改为用文字给出内容、步骤或代码。可在 `[pi]` 下用 `append_instruction = false` 关掉这条注入。
+Pi is a coding agent with **Bash / Read / Write / Edit** tools. Bridging iMessage to it means a whitelisted contact can — via Pi — run commands on your Mac. Keep the whitelist to numbers you control.
 
-## 运行方式（重要）
+## License
 
-iBotEz **必须在前台 / GUI 会话里运行**（终端、tmux，或未来的 .app 登录项）：
-
-- macOS 会**静默拦截后台 launchd 守护进程**对 iMessage 的脚本化"发送"（osascript 返回成功但消息不发出去）；
-- 且 homebrew 的 **venv python 在 launchd 下启动会死锁**。
-
-所以：
-
-```bash
-# 推荐：终端里前台跑（收发全通）
-venv/bin/python -m ibotez run
-
-# 崩溃自启：Pi 挂时内置看门狗让进程非零退出，循环拉起
-while true; do venv/bin/python -m ibotez run; echo "restarting in 5s…"; sleep 5; done
-```
-
-- 需要**完全磁盘访问**（授予运行 iBotEz 的 python 解释器）才能读 `~/Library/Messages/chat.db`。
-- `deploy/com.ibotez.bridge.plist` 仅作参考保留：launchd 下「收信 + Pi」可用，但**发不出消息**。
-- 想要「开机自启 + 能发送」的守护进程，需把 iBotEz 打成 `.app` 加到登录项（在 GUI 会话里运行）——待办。
+[MIT](LICENSE)

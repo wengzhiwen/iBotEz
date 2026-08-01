@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e .
+      - run: python -m compileall -q ibotez
+      - run: ibotez --version
+      - run: python -c "from ibotez.config import Config; Config.load('config.example.toml'); print('config ok')"
+      - run: python -c "from ibotez.cron import matches; import datetime; assert matches('0 9 * * *', datetime.datetime(2026,1,1,9,0))"

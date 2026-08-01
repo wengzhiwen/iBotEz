@@ -48,6 +48,10 @@ class Config:
     stall_seconds: float = 600.0        # non-empty queue + no progress => restart
     max_depth: int = 100                # queue-depth warning threshold
 
+    # [log]
+    log_file: str = ""                  # empty = <config_dir>/logs/ibotez.log
+    log_level: str = "INFO"             # DEBUG / INFO / WARNING / ERROR
+
     config_path: Path = field(default_factory=lambda: Path("config.toml"))
     state_path: Path = field(default_factory=lambda: Path("state.json"))
 
@@ -65,6 +69,7 @@ class Config:
         pi = raw.get("pi", {})
         br = raw.get("bridge", {})
         health = raw.get("health", {})
+        log = raw.get("log", {})
         schedules = [
             Schedule(
                 cron=str(s["cron"]),
@@ -92,6 +97,8 @@ class Config:
             health_check_seconds=float(health.get("check_seconds", 5.0)),
             stall_seconds=float(health.get("stall_seconds", 600.0)),
             max_depth=int(health.get("max_depth", 100)),
+            log_file=str(log.get("file", "")),
+            log_level=str(log.get("level", "INFO")).upper(),
             config_path=path,
             state_path=path.parent / "state.json",
         )

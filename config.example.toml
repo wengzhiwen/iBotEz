@@ -48,3 +48,9 @@ reply_on_error = "（处理出错了，请稍后再试）"
 check_seconds = 5
 stall_seconds = 600
 max_depth = 100   # queue depth at which a warning is logged
+
+[log]
+# Logging. `file` empty => <project>/logs/ibotez.log. `level`: DEBUG/INFO/WARNING/ERROR.
+# `-v` on the CLI forces DEBUG regardless of `level`.
+file = ""
+level = "INFO"
