@@ -15,3 +15,4 @@ class Job:
     label: str                 # human label for logs
     session_name: str | None = None  # optional Pi session display name
     builtin: str = ""          # built-in task to run instead of a Pi prompt ("pi-update")
+    reply_prefix: str = ""     # prepended to Pi's reply (e.g. "【12】" for session-slot messages)

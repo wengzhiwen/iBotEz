@@ -11,6 +11,10 @@
 
 While a Pi turn is slow, the worker sends periodic progress iMessages and, if Pi
 stalls, aborts and retries a bounded number of times.
+
+Users can address numbered Pi sessions with a leading "！N" (full-width exclamation
++ 1-3 digits): each (contact, N) pair keeps its own Pi session, and Pi's reply is
+prefixed with 【N】. Messages without the prefix use the contact's default session.
 """
 from __future__ import annotations
 
@@ -206,7 +210,7 @@ async def _handle_job(
                 log.exception("could not capture Pi session file for %s", job.session_key)
 
         if text:
-            await _send_imessage(job.reply_to, text, health)
+            await _send_imessage(job.reply_to, job.reply_prefix + text, health)
             log.info("replied (%s): %r", job.label, text[:80])
         elif error:
             log.warning("job %s ended with error: %s", job.label, error)
@@ -214,6 +218,11 @@ async def _handle_job(
                 await _send_imessage(job.reply_to, cfg.reply_on_error, health)
         else:
             log.info("no text reply for %s (tool-only or empty)", job.label)
+            await _send_imessage(
+                job.reply_to,
+                f"{job.reply_prefix}（Pi 本轮没有给出文字回复，可以换个问法再试）",
+                health,
+            )
 
     except Exception as e:  # the bridge must stay up across job failures
         log.exception("failed to handle job %s: %s", job.label, e)
@@ -223,6 +232,14 @@ async def _handle_job(
 
 
 # -- producers / consumers ---------------------------------------------------
+
+# Session-slot command: a leading full-width "！" + 1-3 digits selects that
+# sender's numbered Pi session (e.g. "！12 请继续运算" -> slot 12 of the sender).
+# Each (contact, slot) pair maps to its own Pi session, so different iMessage
+# accounts never share slots. Messages without the prefix use the contact's
+# default session as before.
+_SESSION_CMD_RE = re.compile(r"^！(\d{1,3})(?!\d)\s*(.*)$", re.S)
+
 
 async def poller(
     cfg: Config,
@@ -253,12 +270,36 @@ async def poller(
             key = imessage.norm_contact(m.sender)
             if key not in allow:
                 continue
+
+            session_key = key
+            prompt = m.text or ""
+            session_name = m.sender or None
+            reply_prefix = ""
+            label = f"from {m.sender}"
+
+            cmd = _SESSION_CMD_RE.match(prompt)
+            if cmd:
+                slot = int(cmd.group(1))  # int() normalizes "！07" -> slot 7
+                prompt = cmd.group(2).strip()
+                reply_prefix = f"【{slot}】"
+                if not prompt:
+                    await _send_imessage(
+                        m.chat_guid or "",
+                        f"{reply_prefix}请在 ！{slot} 后跟上要发给 Pi 的内容",
+                        health,
+                    )
+                    continue
+                session_key = f"{key}!{slot}"
+                session_name = f"{m.sender} !{slot}"
+                label = f"from {m.sender} !{slot}"
+
             await queue.put(Job(
-                session_key=key,
-                prompt=m.text or "",
+                session_key=session_key,
+                prompt=prompt,
                 reply_to=m.chat_guid or "",
-                label=f"from {m.sender}",
-                session_name=m.sender or None,
+                label=label,
+                session_name=session_name,
+                reply_prefix=reply_prefix,
             ))
             health.enqueued += 1
             new += 1

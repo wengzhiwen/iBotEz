@@ -147,7 +147,9 @@ class PiRpcClient:
     # -- session lifecycle --------------------------------------------------
 
     async def new_session(self, name: str | None = None) -> None:
-        await self._cmd({"type": "new_session"})
+        o = await self._cmd({"type": "new_session"})
+        if (o.get("data") or {}).get("cancelled"):
+            raise PiRpcError("new_session cancelled by an extension")
         if name:
             try:
                 await self._cmd({"type": "set_session_name", "name": name})
@@ -155,7 +157,9 @@ class PiRpcClient:
                 pass  # naming is cosmetic; don't fail the turn
 
     async def switch_session(self, session_path: str) -> None:
-        await self._cmd({"type": "switch_session", "sessionPath": session_path})
+        o = await self._cmd({"type": "switch_session", "sessionPath": session_path})
+        if (o.get("data") or {}).get("cancelled"):
+            raise PiRpcError(f"switch_session cancelled by an extension: {session_path}")
 
     async def current_session_file(self) -> str:
         o = await self._cmd({"type": "get_state"})
