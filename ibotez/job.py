@@ -14,3 +14,4 @@ class Job:
     reply_to: str              # chat_guid the result is sent to (empty = nowhere)
     label: str                 # human label for logs
     session_name: str | None = None  # optional Pi session display name
+    builtin: str = ""          # built-in task to run instead of a Pi prompt ("pi-update")

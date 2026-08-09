@@ -40,6 +40,18 @@ reply_on_error = "（处理出错了，请稍后再试）"
 # cron = "0 9 * * *"                       # every day at 09:00
 # prompt = "请简洁总结今日美元兑日元汇率的重要新闻"
 # to = "+8613xxxxxxxx"
+#
+# Built-in tasks: set `builtin` instead of `prompt` to run a maintenance task.
+# Available builtins:
+#   "pi-update" — run `pi update`, iMessage a briefing to `to`, and when an
+#   upgrade lands, restart iBotEz (exit non-zero once idle, supervisor
+#   relaunches) so it picks up the new Pi version.
+#
+# [[schedule]]
+# name = "pi-auto-update"
+# cron = "23 4 */2 * *"                    # every two days (~48h) at 04:23
+# builtin = "pi-update"
+# to = "+8613xxxxxxxx"
 
 [health]
 # The watchdog checks every `check_seconds`. It restarts iBotEz (by exiting

@@ -3,7 +3,9 @@
 On each minute boundary, every [[schedule]] whose cron expression matches the
 current local time is turned into a Job on the shared worker queue (resolved to
 the target contact's chat_guid). The worker then runs the prompt and sends the
-result, with the same progress/retry handling as incoming messages.
+result, with the same progress/retry handling as incoming messages. A schedule
+with `builtin` set (e.g. "pi-update") runs that built-in task instead of a Pi
+prompt.
 """
 from __future__ import annotations
 
@@ -67,6 +69,7 @@ async def scheduler(
                 reply_to=chat_guid,
                 label=f"schedule:{name}",
                 session_name=name,
+                builtin=s.builtin,
             ))
             health.enqueued += 1
             log.info("scheduled task %r fired -> %s", name, s.to)

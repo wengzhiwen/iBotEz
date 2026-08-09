@@ -5,7 +5,9 @@
                                                                 ^
     a health watchdog supervises: if the Pi subprocess dies, or the worker stalls
     with a non-empty queue, it raises ServiceRestart so the process exits NON-ZERO
-    and a supervisor relaunches iBotEz.
+    and a supervisor relaunches iBotEz. A scheduled built-in task ([[schedule]]
+    builtin = "pi-update") runs `pi update`, iMessages a briefing, and restarts
+    the same way when an upgrade lands.
 
 While a Pi turn is slow, the worker sends periodic progress iMessages and, if Pi
 stalls, aborts and retries a bounded number of times.
@@ -15,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import signal
 import time
 
@@ -122,9 +125,68 @@ async def _run_pi_with_progress(
 
 # -- job handling ------------------------------------------------------------
 
-async def _handle_job(
-    pi: PiRpcClient, state: SessionMap, cfg: Config, job: Job, health: Health
+async def _run_pi_update(
+    cfg: Config, job: Job, queue: asyncio.Queue, health: Health
 ) -> None:
+    """Built-in task: run `pi update` once, iMessage a briefing to job.reply_to,
+    and when an upgrade landed raise ServiceRestart (once the queue has drained)
+    so the supervisor relaunches iBotEz on the new version."""
+    cmd = [cfg.pi_command[0], "update"]
+    log.info("job %s: running %s ...", job.label, " ".join(cmd))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        text = out.decode(errors="replace")
+    except Exception as e:
+        log.exception("pi update failed to run")
+        await _send_imessage(job.reply_to, f"⚠️ Pi 自动升级执行失败（{e}），下个周期再试。", health)
+        return
+    for line in text.strip().splitlines():
+        log.info("pi update: %s", line)
+    if proc.returncode != 0:
+        log.warning("pi update exited with code %d", proc.returncode)
+        await _send_imessage(
+            job.reply_to,
+            f"⚠️ Pi 自动升级失败（pi update 退出码 {proc.returncode}），下个周期再试。",
+            health,
+        )
+        return
+
+    m = re.search(r"Updated pi from (\S+) to (\S+)", text)
+    if not m:
+        await _send_imessage(job.reply_to, "✅ Pi 自动升级检查完成：已是最新版本。", health)
+        return
+
+    old, new = m.group(1), m.group(2)
+    await _send_imessage(
+        job.reply_to,
+        f"⬆️ Pi 已自动升级：{old} → {new}。iBotEz 将在空闲时重启以启用新版本。",
+        health,
+    )
+
+    # Upgraded: wait for queued jobs to drain so we don't kill a running turn
+    # (the worker is serial and busy with *this* job), then restart.
+    log.info("pi upgraded (%s -> %s) — restarting once the queue is drained", old, new)
+    while not queue.empty():
+        await asyncio.sleep(5)
+    raise ServiceRestart(f"pi updated {old} -> {new} — restarting on the new version")
+
+
+async def _handle_job(
+    pi: PiRpcClient, state: SessionMap, cfg: Config, job: Job,
+    queue: asyncio.Queue, health: Health,
+) -> None:
+    if job.builtin:
+        if job.builtin == "pi-update":
+            await _run_pi_update(cfg, job, queue, health)
+        else:
+            log.error("job %s: unknown builtin %r — ignored", job.label, job.builtin)
+        return
+
     log.info("job %s -> pi (session=%s)", job.label, job.session_key)
 
     session_file = state.sessions.get(job.session_key)
@@ -214,7 +276,7 @@ async def worker(
         job: Job = await queue.get()
         health.mark_progress()  # counts as progress even before Pi answers
         try:
-            await _handle_job(pi, state, cfg, job, health)
+            await _handle_job(pi, state, cfg, job, queue, health)
         finally:
             queue.task_done()
 

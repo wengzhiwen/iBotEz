@@ -11,11 +11,13 @@ from .imessage import norm_contact
 
 @dataclass
 class Schedule:
-    """A cron-driven task: run `prompt` on schedule, send Pi's reply to `to`."""
+    """A cron-driven task: run `prompt` on schedule, send Pi's reply to `to`.
+    Set `builtin` instead of `prompt` to run a built-in task ("pi-update")."""
     cron: str
     prompt: str
     to: str
     name: str = ""
+    builtin: str = ""
 
 
 @dataclass
@@ -73,12 +75,13 @@ class Config:
         schedules = [
             Schedule(
                 cron=str(s["cron"]),
-                prompt=str(s["prompt"]),
+                prompt=str(s.get("prompt", "")),
                 to=str(s["to"]),
                 name=str(s.get("name", "")),
+                builtin=str(s.get("builtin", "")),
             )
             for s in raw.get("schedule", [])
-            if s.get("cron") and s.get("prompt") and s.get("to")
+            if s.get("cron") and s.get("to") and (s.get("prompt") or s.get("builtin"))
         ]
         return cls(
             interval=float(poll.get("interval_seconds", 2.0)),
