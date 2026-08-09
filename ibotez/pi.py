@@ -210,7 +210,7 @@ class PiRpcClient:
                 ame = o.get("assistantMessageEvent") or {}
                 at = ame.get("type") or ""
                 if at == "error":
-                    error_seen = ame.get("error") or error_seen
+                    error_seen = ame.get("error") or ame.get("errorMessage") or error_seen
                 elif at.startswith("thinking"):
                     self.current_status = "思考中"
                 elif at.startswith("text"):
@@ -224,14 +224,22 @@ class PiRpcClient:
                     txt = _assistant_text(msg)
                     if txt:
                         last_text = txt
+                    # A failed assistant message (stopReason "error", e.g. API
+                    # connection failure) carries errorMessage but no text —
+                    # capture it so the caller sees an error, not silence.
+                    if not error_seen and msg.get("errorMessage"):
+                        error_seen = msg["errorMessage"]
 
             elif t == "agent_end":
                 for m in reversed(o.get("messages") or []):
-                    if m.get("role") == "assistant":
-                        txt = _assistant_text(m)
-                        if txt:
-                            last_text = txt
-                            break
+                    if m.get("role") != "assistant":
+                        continue
+                    if not error_seen and m.get("errorMessage"):
+                        error_seen = m["errorMessage"]
+                    txt = _assistant_text(m)
+                    if txt:
+                        last_text = txt
+                        break
                 if not o.get("willRetry"):
                     break  # done — final attempt, no more retries
 
