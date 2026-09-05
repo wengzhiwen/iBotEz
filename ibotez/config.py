@@ -45,6 +45,11 @@ class Config:
     # [[schedule]]  (cron tasks)
     schedules: list[Schedule] = field(default_factory=list)
 
+    # [scheduler]
+    # Minutes to wait between retries when a scheduled task fails (each entry is
+    # one retry; empty list = no intraday retries, just the failure notice).
+    schedule_retry_minutes: list[float] = field(default_factory=lambda: [5.0, 15.0, 30.0])
+
     # [health]
     health_check_seconds: float = 5.0   # how often the watchdog evaluates
     stall_seconds: float = 600.0        # non-empty queue + no progress => restart
@@ -72,6 +77,7 @@ class Config:
         br = raw.get("bridge", {})
         health = raw.get("health", {})
         log = raw.get("log", {})
+        scheduler = raw.get("scheduler", {})
         schedules = [
             Schedule(
                 cron=str(s["cron"]),
@@ -97,6 +103,9 @@ class Config:
             allow=[str(x) for x in br.get("allow", [])],
             reply_on_error=br.get("reply_on_error", ""),
             schedules=schedules,
+            schedule_retry_minutes=[
+                float(x) for x in scheduler.get("retry_minutes", [5, 15, 30])
+            ],
             health_check_seconds=float(health.get("check_seconds", 5.0)),
             stall_seconds=float(health.get("stall_seconds", 600.0)),
             max_depth=int(health.get("max_depth", 100)),

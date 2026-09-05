@@ -22,6 +22,12 @@ no_progress_timeout_seconds = 120   # no Pi event for this long => stalled => ab
 max_retries = 2                     # bounded retries on stall/failure
 append_instruction = true           # tell Pi this bot is text-only (it refuses file generate/send requests)
 
+[scheduler]
+# When a scheduled task fails (e.g. a transient provider/network error), retry
+# it after each of these delays (minutes). An empty list disables intraday
+# retries — the failure notice is sent immediately instead.
+retry_minutes = [5, 15, 30]
+
 [bridge]
 # Whitelist of senders (phone numbers or emails) whose messages get bridged.
 # Phone numbers are matched on their last 10 digits; emails are lowercased.

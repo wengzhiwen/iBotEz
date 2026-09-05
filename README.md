@@ -59,6 +59,7 @@ Everything lives in `config.toml` (see `config.example.toml`):
 | `[imessage]` | `db_path` (`~/Library/Messages/chat.db`) |
 | `[pi]` | `command` (`["pi","--mode","rpc"]`), `progress_interval_seconds` (30), `no_progress_timeout_seconds` (120), `max_retries` (2), `append_instruction` (true) |
 | `[bridge]` | `allow` (whitelist of phones/emails), `reply_on_error` |
+| `[scheduler]` | `retry_minutes` (`[5, 15, 30]`) — intraday backoff retries for failed scheduled tasks |
 | `[[schedule]]` | `cron`, `prompt`, `to`, `name` |
 | `[health]` | `check_seconds` (5), `stall_seconds` (600), `max_depth` (100) |
 | `[log]` | `file`, `level` (`INFO`) |

@@ -24,11 +24,14 @@ import logging
 import re
 import signal
 import time
+from dataclasses import replace
+from datetime import datetime
 
 from . import imessage
 from .config import Config
 from .job import Job
 from .pi import PiRpcClient, PiRpcError, PiStalled
+from .scheduler import SchedState
 from .session_map import SessionMap
 
 log = logging.getLogger("ibotez.bridge")
@@ -152,6 +155,78 @@ async def _run_pi_with_progress(
 
 # -- job handling ------------------------------------------------------------
 
+# Scheduled-task retry: hold strong refs to sleeping re-enqueue tasks so they
+# aren't garbage-collected mid-sleep.
+_retry_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_retry(
+    delay_minutes: float, job: Job, queue: asyncio.Queue, health: Health
+) -> None:
+    """Re-enqueue `job` on the worker queue after `delay_minutes`."""
+
+    async def _later() -> None:
+        await asyncio.sleep(delay_minutes * 60.0)
+        await queue.put(job)
+        health.enqueued += 1
+        log.info("scheduled-task retry re-enqueued: %s", job.label)
+
+    t = asyncio.create_task(_later())
+
+    def _done(task: asyncio.Task) -> None:
+        _retry_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()  # retrieve, so asyncio doesn't log it as unhandled
+
+    _retry_tasks.add(t)
+    t.add_done_callback(_done)
+
+
+async def _report_scheduled_failure(
+    sched_state: SchedState, cfg: Config, job: Job,
+    queue: asyncio.Queue, health: Health, error: str,
+) -> None:
+    """A scheduled task failed: notify with the task name and error, retry with
+    backoff (re-enqueue after cfg.schedule_retry_minutes), and when the retries
+    run out send a final notice saying when the task last succeeded."""
+    name = job.schedule_name
+    delays = cfg.schedule_retry_minutes
+    if job.retry_attempt < len(delays):
+        delay = delays[job.retry_attempt]
+        # Schedule the retry FIRST: if the notice below fails to send, the
+        # retry must still happen (a transient iMessage hiccup must not lose
+        # the task for the day).
+        retry = replace(
+            job,
+            retry_attempt=job.retry_attempt + 1,
+            label=f"{job.label}#r{job.retry_attempt + 1}",
+        )
+        _schedule_retry(delay, retry, queue, health)
+        with contextlib.suppress(Exception):
+            await _send_imessage(
+                job.reply_to,
+                f"⚠️ 定时任务「{name}」失败：{error}。{delay:g} 分钟后自动重试"
+                f"（{job.retry_attempt + 1}/{len(delays)}）",
+                health,
+            )
+    else:
+        last = sched_state.last_success.get(name)
+        last_str = "无记录"
+        if last:
+            with contextlib.suppress(ValueError):
+                last_str = datetime.fromisoformat(last).strftime("%m-%d %H:%M")
+        log.error(
+            "scheduled task %r gave up after %d retries: %s (last success %s)",
+            name, len(delays), error, last_str,
+        )
+        with contextlib.suppress(Exception):
+            await _send_imessage(
+                job.reply_to,
+                f"❌ 定时任务「{name}」未能完成（已重试 {len(delays)} 次，最后错误：{error}）。"
+                f"上次成功：{last_str}",
+                health,
+            )
+
 async def _run_pi_update(
     cfg: Config, job: Job, queue: asyncio.Queue, health: Health
 ) -> None:
@@ -205,7 +280,7 @@ async def _run_pi_update(
 
 async def _handle_job(
     pi: PiRpcClient, state: SessionMap, cfg: Config, job: Job,
-    queue: asyncio.Queue, health: Health,
+    queue: asyncio.Queue, health: Health, sched_state: SchedState,
 ) -> None:
     if job.builtin:
         if job.builtin == "pi-update":
@@ -235,9 +310,23 @@ async def _handle_job(
         if text:
             await _send_imessage(job.reply_to, job.reply_prefix + text, health)
             log.info("replied (%s): %r", job.label, text[:80])
+            if job.is_scheduled:
+                try:
+                    sched_state.last_success[job.schedule_name] = (
+                        datetime.now().astimezone().isoformat(timespec="seconds")
+                    )
+                    sched_state.save()
+                except Exception:
+                    log.exception(
+                        "could not record last_success for %s", job.schedule_name
+                    )
         elif error:
             log.warning("job %s ended with error: %s", job.label, error)
-            if cfg.reply_on_error:
+            if job.is_scheduled:
+                await _report_scheduled_failure(
+                    sched_state, cfg, job, queue, health, error
+                )
+            elif cfg.reply_on_error:
                 await _send_imessage(job.reply_to, cfg.reply_on_error, health)
         else:
             log.info("no text reply for %s (tool-only or empty)", job.label)
@@ -334,13 +423,14 @@ async def poller(
 
 
 async def worker(
-    cfg: Config, state: SessionMap, pi: PiRpcClient, queue: asyncio.Queue, health: Health
+    cfg: Config, state: SessionMap, pi: PiRpcClient, queue: asyncio.Queue,
+    health: Health, sched_state: SchedState,
 ) -> None:
     while True:
         job: Job = await queue.get()
         health.mark_progress()  # counts as progress even before Pi answers
         try:
-            await _handle_job(pi, state, cfg, job, queue, health)
+            await _handle_job(pi, state, cfg, job, queue, health, sched_state)
         finally:
             queue.task_done()
 
@@ -384,6 +474,7 @@ async def run(cfg: Config) -> None:
         )
 
     state = SessionMap.load(cfg.state_path)
+    sched_state = SchedState.load(cfg.state_path.parent / "sched_state.json")
 
     pi_command = list(cfg.pi_command)
     if cfg.pi_append_instruction:
@@ -431,7 +522,7 @@ async def run(cfg: Config) -> None:
             async with asyncio.TaskGroup() as tg:
                 tasks = [
                     tg.create_task(poller(cfg, state, allow, queue, health), name="poller"),
-                    tg.create_task(worker(cfg, state, pi, queue, health), name="worker"),
+                    tg.create_task(worker(cfg, state, pi, queue, health, sched_state), name="worker"),
                     tg.create_task(scheduler_task(cfg.schedules, cfg.db_path, queue, health), name="scheduler"),
                     tg.create_task(monitor(cfg, pi, queue, health), name="monitor"),
                 ]

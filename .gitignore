@@ -8,6 +8,7 @@ __pycache__/
 # Local config & runtime state — DO NOT COMMIT (contains phone numbers / paths)
 config.toml
 state.json
+sched_state.json
 .pi-sessions/
 
 # Logs: keep the directory, ignore its contents

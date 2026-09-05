@@ -6,13 +6,19 @@ the target contact's chat_guid). The worker then runs the prompt and sends the
 result, with the same progress/retry handling as incoming messages. A schedule
 with `builtin` set (e.g. "pi-update") runs that built-in task instead of a Pi
 prompt.
+
+SchedState persists per-task bookkeeping (e.g. time of last successful run) in
+its own JSON file next to state.json, separate so the running bridge's frequent
+state.json rewrites never clobber it.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 
 from . import imessage
 from .config import Schedule
@@ -20,6 +26,41 @@ from .cron import matches
 from .job import Job
 
 log = logging.getLogger("ibotez.scheduler")
+
+
+class SchedState:
+    """Persistent scheduler bookkeeping (task name -> ISO timestamp)."""
+
+    def __init__(
+        self,
+        last_success: dict[str, str] | None = None,
+        path: Path | None = None,
+    ):
+        self.last_success = last_success or {}
+        self.path = path
+
+    @classmethod
+    def load(cls, path: Path) -> "SchedState":
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return cls(
+                    {str(k): str(v) for k, v in dict(data.get("last_success", {})).items()},
+                    path,
+                )
+            except Exception:
+                log.exception("sched state file %s unreadable — starting fresh", path)
+        return cls(path=path)
+
+    def save(self) -> None:
+        if self.path is None:
+            return
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps({"last_success": self.last_success}, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(self.path)
 
 
 async def scheduler(
