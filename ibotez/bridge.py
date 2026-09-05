@@ -330,6 +330,14 @@ async def _run_pi_update(
     raise ServiceRestart(f"pi updated {old} -> {new} — restarting on the new version")
 
 
+# Appended to a scheduled task's prompt when Pi returned tool calls but no
+# text: web-search-heavy report skills occasionally end their turn without
+# emitting the report itself.
+_NO_TEXT_NUDGE = (
+    "\n\n注意：上一轮没有产出任何文字。请直接输出完整的报告文字内容，不要只调用工具。"
+)
+
+
 async def _handle_job(
     pi: PiRpcClient, state: SessionMap, cfg: Config, job: Job,
     queue: asyncio.Queue, health: Health, sched_state: SchedState,
@@ -350,7 +358,23 @@ async def _handle_job(
         else:
             await pi.new_session(name=job.session_name or job.session_key)
 
-        text, error = await _run_pi_with_progress(pi, job, cfg, health)
+        text, error = None, None
+        prompt = job.prompt
+        # Scheduled tasks get one immediate nudge if Pi ends its turn with tool
+        # calls but no text; interactive messages keep the single attempt (the
+        # "换个问法" notice below fits a human in the loop, not a cron job).
+        attempts = 2 if job.is_scheduled else 1
+        for attempt_no in range(attempts):
+            text, error = await _run_pi_with_progress(
+                pi, replace(job, prompt=prompt), cfg, health
+            )
+            if text or error:
+                break
+            if attempt_no + 1 < attempts:
+                log.info("no text reply for %s (tool-only or empty) — nudging once", job.label)
+                prompt = job.prompt + _NO_TEXT_NUDGE
+        if not text and not error and job.is_scheduled:
+            error = "Pi 两次均未产出文字"
 
         if session_file is None:
             try:
