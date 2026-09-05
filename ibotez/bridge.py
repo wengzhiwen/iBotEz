@@ -64,6 +64,51 @@ class Health:
         self.processed += 1
 
 
+class WatermarkTracker:
+    """Advances the persisted watermark only as jobs complete (at-least-once).
+
+    The poller used to advance the watermark the moment a message was *read*;
+    with an in-memory queue, a restart between "saved" and "job done" lost the
+    message forever. Now a message's date is marked pending when its job is
+    enqueued and committed when the job finishes; the watermark folds up to the
+    newest committed date that is still older than the oldest pending one, so
+    unfinished work is re-fetched after a restart (worst case: one duplicate
+    reply if the process died between sending it and committing).
+    """
+
+    def __init__(self, state: SessionMap) -> None:
+        self._state = state
+        self._pending: set[int] = set()    # dates of enqueued-but-unfinished jobs
+        self._committed: set[int] = set()  # finished dates not yet folded in
+
+    def pending(self, date: int) -> None:
+        """Mark `date` as having an unfinished job gating the watermark."""
+        if date:
+            self._pending.add(date)
+
+    def commit(self, date: int) -> None:
+        """Mark `date` finished (job done or no job needed); fold the watermark."""
+        if not date:
+            return
+        self._pending.discard(date)
+        self._committed.add(date)
+        if self._pending:
+            bound = min(self._pending)
+            candidates = [d for d in self._committed if d < bound]
+            watermark = max(candidates) if candidates else None
+        else:
+            watermark = max(self._committed)
+        if watermark is not None and watermark > self._state.watermark:
+            self._state.watermark = watermark
+            try:
+                self._state.save()
+            except Exception:
+                # A failed save only means the watermark lags (possible
+                # duplicate replies later) — never worth killing the bridge.
+                log.exception("could not persist watermark")
+        self._committed = {d for d in self._committed if d > self._state.watermark}
+
+
 # -- iMessage send helper (non-blocking) -------------------------------------
 
 async def _send_imessage(chat_guid: str, text: str, health: Health) -> None:
@@ -366,6 +411,7 @@ async def poller(
     allow: set[str],
     queue: asyncio.Queue,
     health: Health,
+    tracker: WatermarkTracker,
 ) -> None:
     interval = cfg.interval
     while True:
@@ -381,13 +427,11 @@ async def poller(
             msgs = []
 
         for m in msgs:
-            # Advance the watermark for every new message so non-whitelisted
-            # ones don't pile up to be re-evaluated forever.
-            if m.date > state.watermark:
-                state.watermark = m.date
-                state.save()
             key = imessage.norm_contact(m.sender)
             if key not in allow:
+                # No job will ever finish for this message — commit it now so
+                # non-whitelisted messages don't pile up to be re-evaluated.
+                tracker.commit(m.date)
                 continue
 
             session_key = key
@@ -407,11 +451,13 @@ async def poller(
                         f"{reply_prefix}请在 ！{slot} 后跟上要发给 Pi 的内容",
                         health,
                     )
+                    tracker.commit(m.date)
                     continue
                 session_key = f"{key}!{slot}"
                 session_name = f"{m.sender} !{slot}"
                 label = f"from {m.sender} !{slot}"
 
+            tracker.pending(m.date)
             await queue.put(Job(
                 session_key=session_key,
                 prompt=prompt,
@@ -419,6 +465,7 @@ async def poller(
                 label=label,
                 session_name=session_name,
                 reply_prefix=reply_prefix,
+                commit_date=m.date,
             ))
             health.enqueued += 1
             new += 1
@@ -431,13 +478,22 @@ async def poller(
 
 async def worker(
     cfg: Config, state: SessionMap, pi: PiRpcClient, queue: asyncio.Queue,
-    health: Health, sched_state: SchedState,
+    health: Health, sched_state: SchedState, tracker: WatermarkTracker,
 ) -> None:
     while True:
         job: Job = await queue.get()
         health.mark_progress()  # counts as progress even before Pi answers
         try:
             await _handle_job(pi, state, cfg, job, queue, health, sched_state)
+        except asyncio.CancelledError:
+            # Shutting down / restarting mid-job: do NOT commit — the source
+            # message must be re-fetched and answered after the restart.
+            raise
+        else:
+            # Job finished (success, or a failure already reported to the
+            # user): let the watermark advance past its source message.
+            # commit(0) is a no-op for scheduled/retry jobs.
+            tracker.commit(job.commit_date)
         finally:
             queue.task_done()
 
@@ -520,6 +576,7 @@ async def run(cfg: Config) -> None:
 
         queue: asyncio.Queue[Job] = asyncio.Queue()
         health = Health()
+        tracker = WatermarkTracker(state)
 
         # Local import to avoid a bridge<->scheduler circular import at load time.
         from .scheduler import scheduler as scheduler_task
@@ -528,8 +585,8 @@ async def run(cfg: Config) -> None:
         try:
             async with asyncio.TaskGroup() as tg:
                 tasks = [
-                    tg.create_task(poller(cfg, state, allow, queue, health), name="poller"),
-                    tg.create_task(worker(cfg, state, pi, queue, health, sched_state), name="worker"),
+                    tg.create_task(poller(cfg, state, allow, queue, health, tracker), name="poller"),
+                    tg.create_task(worker(cfg, state, pi, queue, health, sched_state, tracker), name="worker"),
                     tg.create_task(
                         scheduler_task(cfg.schedules, cfg.db_path, queue, health,
                                        sched_state, cfg.catchup_hours),

@@ -17,6 +17,8 @@ class Job:
     builtin: str = ""          # built-in task to run instead of a Pi prompt ("pi-update")
     reply_prefix: str = ""     # prepended to Pi's reply (e.g. "【12】" for session-slot messages)
     retry_attempt: int = 0     # for scheduled tasks: which backoff retry this run is (0 = first)
+    commit_date: int = 0       # chat.db date of the source message; the watermark
+                               # advances past it only when this job finishes (0 = n/a)
 
     @property
     def is_scheduled(self) -> bool:
