@@ -27,6 +27,11 @@ append_instruction = true           # tell Pi this bot is text-only (it refuses 
 # it after each of these delays (minutes). An empty list disables intraday
 # retries — the failure notice is sent immediately instead.
 retry_minutes = [5, 15, 30]
+# On startup, re-run a scheduled task whose most recent due time within this
+# many hours was missed (Mac asleep / bridge down) and never completed. A task
+# that already succeeded or gave up since that due time is not re-run.
+# 0 disables catch-up entirely.
+catchup_hours = 24
 
 [bridge]
 # Whitelist of senders (phone numbers or emails) whose messages get bridged.

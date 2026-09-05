@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import imessage
@@ -28,15 +28,86 @@ from .job import Job
 log = logging.getLogger("ibotez.scheduler")
 
 
+def _parse_iso(s: str | None) -> datetime | None:
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:  # hand-edited naive stamp: assume local time
+        dt = dt.astimezone()
+    return dt
+
+
+def _last_due_time(expr: str, now: datetime, window_hours: float) -> datetime | None:
+    """Most recent local minute within the window that matches the cron expr."""
+    dt = now.replace(second=0, microsecond=0)
+    for _ in range(int(window_hours * 60)):
+        try:
+            if matches(expr, dt):
+                return dt
+        except ValueError:
+            return None  # invalid expression; the main loop logs it
+        dt -= timedelta(minutes=1)
+    return None
+
+
+async def _catch_up_missed(
+    schedules: list[Schedule],
+    db_path: str,
+    queue: asyncio.Queue,
+    health,
+    sched_state: SchedState,
+    catchup_hours: float,
+) -> None:
+    """Fire (once) any scheduled task whose most recent due time was missed.
+
+    Covers a fire missed while the Mac slept / the bridge was down, and a
+    failure whose retry chain was interrupted by a restart. A task is only
+    caught up when it has neither succeeded nor definitively given up since
+    that due time — so restart loops can't spam re-runs.
+    """
+    now = datetime.now().astimezone()
+    for s in schedules:
+        if s.builtin:
+            continue  # maintenance tasks (e.g. pi-update) re-check on their own
+        name = s.name or f"{s.cron}->{s.to}"
+        due = _last_due_time(s.cron, now, catchup_hours)
+        if due is None:
+            continue
+        last_ok = _parse_iso(sched_state.last_success.get(name))
+        gave_up = _parse_iso(sched_state.last_giveup.get(name))
+        if (last_ok is not None and last_ok >= due) or (gave_up is not None and gave_up >= due):
+            continue
+        chat_guid = imessage.chat_guid_for(db_path, s.to)
+        if not chat_guid:
+            log.warning(
+                "catch-up: task %r cannot resolve %r to a chat_guid — skipping", name, s.to
+            )
+            continue
+        log.info("catching up missed scheduled task %r (due %s)", name, due.strftime("%m-%d %H:%M"))
+        await queue.put(Job(
+            session_key=f"schedule:{name}",
+            prompt=s.prompt,
+            reply_to=chat_guid,
+            label=f"schedule:{name}(catch-up)",
+            session_name=name,
+        ))
+        health.enqueued += 1
+
+
 class SchedState:
     """Persistent scheduler bookkeeping (task name -> ISO timestamp)."""
 
     def __init__(
         self,
         last_success: dict[str, str] | None = None,
+        last_giveup: dict[str, str] | None = None,
         path: Path | None = None,
     ):
         self.last_success = last_success or {}
+        self.last_giveup = last_giveup or {}
         self.path = path
 
     @classmethod
@@ -46,6 +117,7 @@ class SchedState:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 return cls(
                     {str(k): str(v) for k, v in dict(data.get("last_success", {})).items()},
+                    {str(k): str(v) for k, v in dict(data.get("last_giveup", {})).items()},
                     path,
                 )
             except Exception:
@@ -57,7 +129,10 @@ class SchedState:
             return
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(
-            json.dumps({"last_success": self.last_success}, indent=2),
+            json.dumps(
+                {"last_success": self.last_success, "last_giveup": self.last_giveup},
+                indent=2,
+            ),
             encoding="utf-8",
         )
         tmp.replace(self.path)
@@ -68,6 +143,8 @@ async def scheduler(
     db_path: str,
     queue: asyncio.Queue,
     health,
+    sched_state: SchedState | None = None,
+    catchup_hours: float = 24.0,
 ) -> None:
     # Validate cron expressions up front; drop invalid tasks (with a clear log).
     valid: list[Schedule] = []
@@ -82,6 +159,12 @@ async def scheduler(
     if not schedules:
         log.info("no scheduled tasks configured")
         return
+
+    if sched_state is not None:
+        try:
+            await _catch_up_missed(schedules, db_path, queue, health, sched_state, catchup_hours)
+        except Exception:
+            log.exception("catch-up pass failed — continuing with normal scheduling")
 
     log.info("scheduler started: %d task(s)", len(schedules))
     while True:

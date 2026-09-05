@@ -219,6 +219,13 @@ async def _report_scheduled_failure(
             "scheduled task %r gave up after %d retries: %s (last success %s)",
             name, len(delays), error, last_str,
         )
+        # Record the give-up so the startup catch-up pass doesn't re-run a
+        # task that already exhausted its retries today.
+        with contextlib.suppress(Exception):
+            sched_state.last_giveup[name] = (
+                datetime.now().astimezone().isoformat(timespec="seconds")
+            )
+            sched_state.save()
         with contextlib.suppress(Exception):
             await _send_imessage(
                 job.reply_to,
@@ -523,7 +530,10 @@ async def run(cfg: Config) -> None:
                 tasks = [
                     tg.create_task(poller(cfg, state, allow, queue, health), name="poller"),
                     tg.create_task(worker(cfg, state, pi, queue, health, sched_state), name="worker"),
-                    tg.create_task(scheduler_task(cfg.schedules, cfg.db_path, queue, health), name="scheduler"),
+                    tg.create_task(
+                        scheduler_task(cfg.schedules, cfg.db_path, queue, health,
+                                       sched_state, cfg.catchup_hours),
+                        name="scheduler"),
                     tg.create_task(monitor(cfg, pi, queue, health), name="monitor"),
                 ]
 

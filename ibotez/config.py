@@ -49,6 +49,9 @@ class Config:
     # Minutes to wait between retries when a scheduled task fails (each entry is
     # one retry; empty list = no intraday retries, just the failure notice).
     schedule_retry_minutes: list[float] = field(default_factory=lambda: [5.0, 15.0, 30.0])
+    # On startup, re-run a scheduled task whose most recent due time (within
+    # this many hours) was missed while asleep/down and never completed.
+    catchup_hours: float = 24.0
 
     # [health]
     health_check_seconds: float = 5.0   # how often the watchdog evaluates
@@ -106,6 +109,7 @@ class Config:
             schedule_retry_minutes=[
                 float(x) for x in scheduler.get("retry_minutes", [5, 15, 30])
             ],
+            catchup_hours=float(scheduler.get("catchup_hours", 24)),
             health_check_seconds=float(health.get("check_seconds", 5.0)),
             stall_seconds=float(health.get("stall_seconds", 600.0)),
             max_depth=int(health.get("max_depth", 100)),
