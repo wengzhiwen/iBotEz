@@ -186,6 +186,14 @@ class PiRpcClient:
                 break
         self.current_status = "已中止"
 
+    async def compact(self, timeout: float = 300.0) -> None:
+        """Run Pi's native session compaction (the /compact command's engine).
+
+        This is an RPC control command, NOT a prompt: sending "/compact" as a
+        prompt just asks the model to react to that text.
+        """
+        await self._cmd({"type": "compact"}, timeout=timeout)
+
     # -- the main act -------------------------------------------------------
 
     async def prompt(self, message: str, stall_timeout: float = 120.0) -> str:
@@ -199,11 +207,23 @@ class PiRpcClient:
         await self._send({"id": rid, "type": "prompt", "message": message})
         last_text = ""
         error_seen: str | None = None
+        saw_activity = False
         while True:
             o = await self._readobj(stall_timeout)
             if o is None:
                 raise PiStalled(f"no Pi event for {stall_timeout:.0f}s")
             t = o.get("type")
+
+            # prompt() returns on the final agent_end, which leaves Pi's
+            # trailing agent_settled in the stream; a settle that arrives
+            # before ANY event of this turn is that stale one — skip it, or
+            # it would end this turn instantly with an empty reply (which is
+            # how back-to-back prompts used to produce "no text reply").
+            if t == "agent_settled":
+                if saw_activity:
+                    break
+                continue
+            saw_activity = True
 
             # live status for progress reports
             if t == "tool_execution_start":
@@ -244,9 +264,6 @@ class PiRpcClient:
                         break
                 if not o.get("willRetry"):
                     break  # done — final attempt, no more retries
-
-            elif t == "agent_settled":
-                break
 
             elif t == "auto_retry_end" and o.get("success") is False:
                 error_seen = o.get("finalError") or error_seen

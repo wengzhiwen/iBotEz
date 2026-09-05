@@ -350,18 +350,20 @@ def _session_size(path: str) -> int:
         return 0
 
 
-async def _compact_session(pi: PiRpcClient, job: Job, cfg: Config, health: Health) -> None:
-    """Run Pi's /compact on the current session to bound its growth. Reply text
-    is discarded; a failed compaction never blocks the real prompt."""
+async def _compact_session(pi: PiRpcClient, job: Job, health: Health) -> None:
+    """Compact the current Pi session (native RPC command) to keep its context
+    small. A failed compaction never blocks the real prompt."""
     health.last_progress = time.monotonic()  # a long compaction must not look like a stall
     try:
-        await pi.prompt("/compact", stall_timeout=cfg.no_progress_timeout)
+        await pi.compact()
         log.info("auto-compacted oversized session %s", job.session_key)
-    except PiStalled:
-        # Pi is still mid-compact-turn: abort it, or the real prompt below
-        # would consume the compaction's event stream as its own reply.
-        await _abort_quietly(pi)
-        log.warning("auto-compact for %s stalled — aborted (continuing)", job.session_key)
+    except PiRpcError as e:
+        if "Nothing to compact" in str(e):
+            # Session file is big but the live context is already small
+            # (e.g. pi's own auto-compaction ran) — nothing to do.
+            log.info("session %s needs no compaction (context already small)", job.session_key)
+        else:
+            log.warning("auto-compact for %s failed (continuing): %s", job.session_key, e)
     except Exception as e:
         log.warning("auto-compact for %s failed (continuing): %s", job.session_key, e)
     finally:
@@ -396,7 +398,7 @@ async def _handle_job(
             and cfg.auto_compact_threshold_bytes > 0
             and _session_size(session_file) > cfg.auto_compact_threshold_bytes
         ):
-            await _compact_session(pi, job, cfg, health)
+            await _compact_session(pi, job, health)
 
         text, error = None, None
         prompt = job.prompt

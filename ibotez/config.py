@@ -37,8 +37,8 @@ class Config:
     no_progress_timeout: float = 120.0   # no Pi event for this long => stalled => retry
     max_retries: int = 2                 # bounded retries on stall/failure
     pi_append_instruction: bool = True    # append the iMessage capability note to Pi's system prompt
-    # Auto /compact a scheduled task's Pi session once it exceeds this size
-    # (KB; 0 disables). Keeps daily-report sessions from growing unboundedly.
+    # Compact a scheduled task's Pi session (native RPC command) once its file
+    # exceeds this size (KB; 0 disables), keeping the model context small.
     auto_compact_threshold_bytes: int = 400 * 1024
 
     # [bridge]
