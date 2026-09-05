@@ -21,6 +21,10 @@ progress_interval_seconds = 30      # send a progress iMessage every this long w
 no_progress_timeout_seconds = 120   # no Pi event for this long => stalled => abort + retry
 max_retries = 2                     # bounded retries on stall/failure
 append_instruction = true           # tell Pi this bot is text-only (it refuses file generate/send requests)
+# Auto /compact a scheduled task's Pi session before its prompt once the
+# session file exceeds this size (KB). Keeps daily-report sessions from growing
+# unboundedly. 0 disables. Interactive sessions are never auto-compacted.
+auto_compact_threshold_kb = 400
 
 [scheduler]
 # When a scheduled task fails (e.g. a transient provider/network error), retry

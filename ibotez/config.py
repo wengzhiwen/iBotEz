@@ -37,6 +37,9 @@ class Config:
     no_progress_timeout: float = 120.0   # no Pi event for this long => stalled => retry
     max_retries: int = 2                 # bounded retries on stall/failure
     pi_append_instruction: bool = True    # append the iMessage capability note to Pi's system prompt
+    # Auto /compact a scheduled task's Pi session once it exceeds this size
+    # (KB; 0 disables). Keeps daily-report sessions from growing unboundedly.
+    auto_compact_threshold_bytes: int = 400 * 1024
 
     # [bridge]
     allow: list[str] = field(default_factory=list)
@@ -103,6 +106,9 @@ class Config:
             no_progress_timeout=float(pi.get("no_progress_timeout_seconds", 120.0)),
             max_retries=int(pi.get("max_retries", 2)),
             pi_append_instruction=bool(pi.get("append_instruction", True)),
+            auto_compact_threshold_bytes=int(
+                float(pi.get("auto_compact_threshold_kb", 400)) * 1024
+            ),
             allow=[str(x) for x in br.get("allow", [])],
             reply_on_error=br.get("reply_on_error", ""),
             schedules=schedules,

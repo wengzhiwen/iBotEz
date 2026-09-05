@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import signal
 import time
@@ -338,6 +339,32 @@ _NO_TEXT_NUDGE = (
 )
 
 
+def _session_size(path: str) -> int:
+    """Size of a Pi session file (0 if unreadable)."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+async def _compact_session(pi: PiRpcClient, job: Job, cfg: Config, health: Health) -> None:
+    """Run Pi's /compact on the current session to bound its growth. Reply text
+    is discarded; a failed compaction never blocks the real prompt."""
+    health.last_progress = time.monotonic()  # a long compaction must not look like a stall
+    try:
+        await pi.prompt("/compact", stall_timeout=cfg.no_progress_timeout)
+        log.info("auto-compacted oversized session %s", job.session_key)
+    except PiStalled:
+        # Pi is still mid-compact-turn: abort it, or the real prompt below
+        # would consume the compaction's event stream as its own reply.
+        await _abort_quietly(pi)
+        log.warning("auto-compact for %s stalled — aborted (continuing)", job.session_key)
+    except Exception as e:
+        log.warning("auto-compact for %s failed (continuing): %s", job.session_key, e)
+    finally:
+        health.last_progress = time.monotonic()
+
+
 async def _handle_job(
     pi: PiRpcClient, state: SessionMap, cfg: Config, job: Job,
     queue: asyncio.Queue, health: Health, sched_state: SchedState,
@@ -357,6 +384,16 @@ async def _handle_job(
             await pi.switch_session(session_file)
         else:
             await pi.new_session(name=job.session_name or job.session_key)
+
+        # Scheduled sessions grow on every run (report + tool results append
+        # forever); compact oversized ones before this run's prompt.
+        if (
+            job.is_scheduled
+            and session_file
+            and cfg.auto_compact_threshold_bytes > 0
+            and _session_size(session_file) > cfg.auto_compact_threshold_bytes
+        ):
+            await _compact_session(pi, job, cfg, health)
 
         text, error = None, None
         prompt = job.prompt

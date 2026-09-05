@@ -57,7 +57,7 @@ Everything lives in `config.toml` (see `config.example.toml`):
 |---|---|
 | `[poll]` | `interval_seconds` (2), `max_interval_seconds` (15), `backoff_factor` (1.5) |
 | `[imessage]` | `db_path` (`~/Library/Messages/chat.db`) |
-| `[pi]` | `command` (`["pi","--mode","rpc"]`), `progress_interval_seconds` (30), `no_progress_timeout_seconds` (120), `max_retries` (2), `append_instruction` (true) |
+| `[pi]` | `command` (`["pi","--mode","rpc"]`), `progress_interval_seconds` (30), `no_progress_timeout_seconds` (120), `max_retries` (2), `append_instruction` (true), `auto_compact_threshold_kb` (400) |
 | `[bridge]` | `allow` (whitelist of phones/emails), `reply_on_error` |
 | `[scheduler]` | `retry_minutes` (`[5, 15, 30]`) — intraday backoff retries for failed scheduled tasks; `catchup_hours` (24) — re-run tasks whose last due time was missed while asleep/down |
 | `[[schedule]]` | `cron`, `prompt`, `to`, `name` |
