@@ -90,6 +90,12 @@ class WatermarkTracker:
         if date:
             self._pending.add(date)
 
+    def already_handled(self, date: int) -> bool:
+        """True if `date` is committed (but not yet folded into the watermark,
+        e.g. gated by an older pending job) or still pending — either way the
+        poller must not enqueue/notice it again."""
+        return date in self._pending or date in self._committed
+
     def commit(self, date: int) -> None:
         """Mark `date` finished (job done or no job needed); fold the watermark."""
         if not date:
@@ -493,6 +499,16 @@ async def poller(
             msgs = []
 
         for m in msgs:
+            # At-least-once, not at-least-N-times: until a message's job
+            # finishes, the watermark hasn't advanced past it, so every poll
+            # re-fetches it. Without this guard one slow Pi turn re-enqueued
+            # the same message ~10 times (one duplicate reply per copy).
+            # Committed-but-unfolded dates (gated by an older pending job)
+            # must be skipped too, or notice-only messages would re-send on
+            # every poll. Restart-safety is unaffected: both sets are
+            # in-memory only, so unfinished work is re-fetched after a restart.
+            if m.date <= state.watermark or tracker.already_handled(m.date):
+                continue
             key = imessage.norm_contact(m.sender)
             if key not in allow:
                 # No job will ever finish for this message — commit it now so
