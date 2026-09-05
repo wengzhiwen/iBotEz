@@ -68,7 +68,12 @@ async def _send_imessage(chat_guid: str, text: str, health: Health) -> None:
     if not chat_guid:
         return
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, imessage.send, chat_guid, text)
+    try:
+        await loop.run_in_executor(None, imessage.send, chat_guid, text)
+    except Exception:
+        log.exception("send to %s failed: %r", chat_guid, text[:80])
+        raise
+    log.info("sent to %s: %r", chat_guid, text[:80])
     health.last_progress = time.monotonic()
 
 
@@ -77,6 +82,13 @@ async def _send_imessage(chat_guid: str, text: str, health: Health) -> None:
 async def _abort_quietly(pi: PiRpcClient) -> None:
     with contextlib.suppress(Exception):
         await pi.abort()
+
+
+def _swallow(task: asyncio.Task) -> None:
+    """Retrieve (and discard) a finished task's exception so asyncio doesn't
+    log "Task exception was never retrieved" for shielded prompt() tasks."""
+    if not task.cancelled():
+        task.exception()
 
 
 async def _run_pi_with_progress(
@@ -89,6 +101,7 @@ async def _run_pi_with_progress(
 
     for attempt in range(cfg.max_retries + 1):
         task = asyncio.create_task(pi.prompt(job.prompt, stall_timeout=cfg.no_progress_timeout))
+        task.add_done_callback(_swallow)
         start = time.monotonic()
         try:
             while True:
@@ -109,6 +122,10 @@ async def _run_pi_with_progress(
                 await task
             await _abort_quietly(pi)
             if attempt < cfg.max_retries:
+                log.warning(
+                    "attempt %d/%d for %s stalled (%s) — retrying",
+                    attempt + 1, cfg.max_retries + 1, job.label, pi.current_status,
+                )
                 if progress > 0:
                     await _send_imessage(
                         job.reply_to,
@@ -122,7 +139,13 @@ async def _run_pi_with_progress(
             with contextlib.suppress(Exception):
                 await task
             if attempt < cfg.max_retries:
+                log.warning(
+                    "attempt %d/%d for %s failed: %s — retrying",
+                    attempt + 1, cfg.max_retries + 1, job.label, e,
+                )
                 continue
+            log.error("attempt %d/%d for %s failed: %s — giving up",
+                      attempt + 1, cfg.max_retries + 1, job.label, e)
             return None, str(e)
     return None, "max retries exceeded"
 

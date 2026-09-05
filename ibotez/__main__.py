@@ -39,7 +39,7 @@ def _setup_logging(cfg: Config, verbose: bool) -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%m-%d %H:%M:%S",
         handlers=handlers,
     )
 

@@ -79,7 +79,9 @@ class PiRpcClient:
             line = await self._exec(self.proc.stderr.readline)
             if not line:
                 break
-            log.debug("pi stderr: %s", line.decode(errors="replace").rstrip())
+            # INFO so pi's own errors (e.g. provider connection failures) are
+            # visible when debugging bridge-side "Connection error" reports.
+            log.info("pi stderr: %s", line.decode(errors="replace").rstrip()[:200])
 
     async def aclose(self) -> None:
         if self.proc and self.proc.poll() is None:
